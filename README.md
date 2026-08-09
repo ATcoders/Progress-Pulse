@@ -10,6 +10,7 @@ A feature-rich desktop task management application designed to help users build 
 - 💾 Local SQLite database for secure offline data storage
 - 🏆 Automatic achievement certificate generation for maintaining 90%+ consistency
 - 🖥️ Desktop application with executable (.exe) support
+- 👥 Login/Signup feature so that multiple user can use it on same device
 
 ## 🛠️ Technologies Used
 
