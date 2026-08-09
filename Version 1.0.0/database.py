@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import calendar
+import hashlib
 
 folder = os.path.join(os.getenv("LOCALAPPDATA"), "TaskPlanner")
 os.makedirs(folder, exist_ok=True)
@@ -106,17 +107,6 @@ def get_task_progress(month, year):
 
 
 def get_week_progress(month, year, week_start_day, week_end_day):
-    """
-    FIX: The previous version put the day-range filter in the WHERE clause,
-    which effectively turns the LEFT JOIN into an INNER JOIN (any progress
-    row outside the range gets dropped BEFORE the join result is grouped,
-    and if a task's rows don't match, filtering removes rows needed for
-    the join to succeed in edge cases, and NULL-completed tasks vanish).
-
-    The day-range condition now lives in the JOIN's ON clause instead,
-    so every task still appears in the result (LEFT JOIN preserved),
-    with completed sums restricted to the requested day range only.
-    """
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -139,9 +129,7 @@ def get_week_progress(month, year, week_start_day, week_end_day):
 def get_month_comparison(year):
     """
     Returns [(month_number, completion_percentage), ...] for all 12 months
-    of the given year. completion_percentage is the average completion
-    across ALL tasks that existed in that month (total completed days /
-    (task_count * days_in_that_month) * 100). Months with no tasks show 0.
+    of the given year, aggregated across all tasks that existed each month.
     """
     conn = get_connection()
     cursor = conn.cursor()
@@ -174,9 +162,7 @@ def get_month_comparison(year):
 def get_week_comparison(month, year):
     """
     Returns [(week_number, completion_percentage, week_start_day, week_end_day), ...]
-    for every week of the given month. completion_percentage is the average
-    completion across ALL tasks in that month for that week's days only
-    (total completed days in week / (task_count * days_in_week) * 100).
+    for every week of the given month.
     """
     conn = get_connection()
     cursor = conn.cursor()
@@ -215,6 +201,44 @@ def get_week_comparison(month, year):
     return results
 
 
+def get_eligible_months(threshold=90):
+    """
+    Certificate eligibility. Returns [(month, year, percentage), ...] for
+    every month (across all years) that reached >= threshold% completion.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT DISTINCT month, year FROM tasks")
+    month_year_pairs = cursor.fetchall()
+
+    eligible = []
+    for month, year in month_year_pairs:
+        days_in_month = calendar.monthrange(year, month)[1]
+
+        cursor.execute("""
+        SELECT COUNT(DISTINCT tasks.id), COALESCE(SUM(progress.completed), 0)
+        FROM tasks
+        LEFT JOIN progress ON tasks.id = progress.task_id
+        WHERE tasks.month=? AND tasks.year=?
+        """, (month, year))
+
+        task_count, total_completed = cursor.fetchone()
+        task_count = task_count or 0
+
+        if task_count > 0:
+            percentage = (total_completed / (task_count * days_in_month)) * 100
+        else:
+            percentage = 0
+
+        if percentage >= threshold:
+            eligible.append((month, year, percentage))
+
+    conn.close()
+    eligible.sort(key=lambda item: (item[1], item[0]))
+    return eligible
+
+
 def clear_tasks():
     conn = get_connection()
     cursor = conn.cursor()
@@ -222,3 +246,59 @@ def clear_tasks():
     cursor.execute("DELETE FROM progress")
     conn.commit()
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# User accounts (Login / Signup)
+# ---------------------------------------------------------------------------
+
+def create_users_table():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS users(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL
+    )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def hash_password(password):
+    # Simple one-way hash. Good enough for a local desktop app;
+    # not meant for storing sensitive/shared account data.
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+def username_exists(username):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM users WHERE username=?", (username,))
+    found = cursor.fetchone() is not None
+    conn.close()
+    return found
+
+
+def signup_user(username, password):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+        (username, hash_password(password))
+    )
+    conn.commit()
+    conn.close()
+
+
+def verify_login(username, password):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT password_hash FROM users WHERE username=?", (username,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if row is None:
+        return False
+    return row[0] == hash_password(password)
