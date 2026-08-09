@@ -20,3 +20,5 @@ A feature-rich desktop task management application designed to help users build 
 - **Matplotlib** – Progress visualization and analytics
 
 ## 🔮 Future Enhancements
+
+Many Cool and useful features will come, Trust Me
